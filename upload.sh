@@ -101,10 +101,12 @@ echo "Uploading file '$FILE_NAME' to GoFile..."
 
 # Show appropriate message based on file size
 if [[ $LARGE_FILE == true ]]; then
-    if [[ $FILE_SIZE_BYTES -gt 1073741824 ]]; then  # >1GB
-        echo "This is a large file - upload may take 5-15+ minutes..."
+    if [[ $FILE_SIZE_BYTES -gt 3221225472 ]]; then  # >3GB
+        echo "This is a very large file - upload may take 15-60+ minutes..."
+    elif [[ $FILE_SIZE_BYTES -gt 1073741824 ]]; then  # >1GB
+        echo "This is a large file - upload may take 10-30 minutes..."
     else
-        echo "This may take a few minutes..."
+        echo "This may take 5-10 minutes..."
     fi
 else
     echo "Uploading..."
@@ -112,12 +114,22 @@ fi
 echo ""
 
 # Use temp file for upload response to avoid storing large responses in memory
-# Increased timeout to 600s (10 min) for large files
-if ! curl -# --fail --connect-timeout 10 --max-time 600 \
+# Increased timeout based on file size:
+# - Files < 1GB: 600s (10 min)
+# - Files 1-3GB: 1800s (30 min)
+# - Files > 3GB: 3600s (60 min)
+UPLOAD_TIMEOUT=600
+if [[ $FILE_SIZE_BYTES -gt 3221225472 ]]; then  # >3GB
+    UPLOAD_TIMEOUT=3600
+elif [[ $FILE_SIZE_BYTES -gt 1073741824 ]]; then  # >1GB
+    UPLOAD_TIMEOUT=1800
+fi
+
+if ! curl -# --fail --connect-timeout 30 --max-time $UPLOAD_TIMEOUT \
     -F "file=@$FILE" "https://${SERVER}.gofile.io/uploadFile" \
     -o "$TEMP_FILE" 2>&1; then
     rm -f "$TEMP_FILE"
-    error_exit "File upload failed! The file might be too large or the server is unavailable."
+    error_exit "File upload failed! The file might be too large, the server is unavailable, or your connection is too slow."
 fi
 
 # Parse the upload response
