@@ -46,7 +46,7 @@ sudo pacman -S curl jq
 ### Method 1: Download the Script
 ```bash
 # Download the script
-curl -o upload.sh https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/upload.sh
+curl -o upload.sh https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
 
 # Make it executable
 chmod +x upload.sh
@@ -56,13 +56,13 @@ chmod +x upload.sh
 You can run the script directly without downloading:
 
 ```bash
-curl -s https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/upload.sh | bash -s -- /path/to/your/file.zip
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- /path/to/your/file.zip
 ```
 
 ### Method 3: Install Globally
 ```bash
 # Download to /usr/local/bin
-sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/upload.sh
+sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
 
 # Make it executable
 sudo chmod +x /usr/local/bin/gofile-upload
