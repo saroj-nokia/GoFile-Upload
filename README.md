@@ -157,7 +157,14 @@ Install the missing dependencies using your package manager (see Requirements se
 
 ### Upload is very slow
 - Large files naturally take longer
-- Check your upload speed: `curl -s https://fast.com`
+- Check your upload speed:
+```bash
+# Install speedtest-cli if needed
+sudo apt install speedtest-cli
+
+# Test your upload speed
+speedtest-cli
+```
 - Consider uploading during off-peak hours
 
 ## Technical Details
