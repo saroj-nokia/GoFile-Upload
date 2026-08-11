@@ -6,7 +6,7 @@ set -o pipefail
 # This script uploads a specified file to GoFile.io and displays the download link.
 # Optimized for large files (e.g., compressed files, images, ROMs 1-4 GB).
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 # --- Error Handling Function ---
 # A function to print error messages to stderr and exit.
@@ -36,10 +36,14 @@ trap cleanup EXIT INT TERM
 # scripting, since it keeps the token out of shell history / process list).
 TOKEN="${GOFILE_TOKEN:-}"
 FILE=""
+LIST_SERVERS=false
+AUTO_FASTEST=false
+CHOOSE_SERVER=false
+FIRST_SERVER=false
 
 print_usage() {
     echo "GoFile Upload Script v${VERSION}"
-    echo "Usage: $0 [-t TOKEN] <file_path>"
+    echo "Usage: $0 [-t TOKEN] [server-selection flag] <file_path>"
     echo ""
     echo "  -t, --token TOKEN   GoFile account API token (ties the upload to your"
     echo "                      account instead of uploading as a guest)."
@@ -47,6 +51,20 @@ print_usage() {
     echo "                      which avoids the token showing up in shell"
     echo "                      history or 'ps' output."
     echo "  -h, --help          Show this help message."
+    echo ""
+    echo "  Server selection (default is --auto-fastest; adds a few seconds"
+    echo "  up front to probe connection latency to each GoFile server):"
+    echo "  --auto-fastest      (Default) Probe all servers and upload to the"
+    echo "                      lowest-latency one. No need to pass this"
+    echo "                      explicitly — it's used automatically when no"
+    echo "                      other server-selection flag is given."
+    echo "  --list-servers      List available servers ranked by latency and exit"
+    echo "                      (no file required, no upload performed)."
+    echo "  --choose-server     Probe all servers, show the ranked list, and"
+    echo "                      prompt you to pick one interactively."
+    echo "  --first-server      Skip probing entirely — use whichever server"
+    echo "                      the GoFile API happens to list first (the old"
+    echo "                      zero-overhead default from before v1.3.0)."
     echo ""
     echo "Find your token at: GoFile.io -> Account -> API Token"
 }
@@ -66,6 +84,22 @@ while [[ "$#" -gt 0 ]]; do
             TOKEN="${1#*=}"
             shift
             ;;
+        --list-servers)
+            LIST_SERVERS=true
+            shift
+            ;;
+        --auto-fastest)
+            AUTO_FASTEST=true
+            shift
+            ;;
+        --choose-server)
+            CHOOSE_SERVER=true
+            shift
+            ;;
+        --first-server)
+            FIRST_SERVER=true
+            shift
+            ;;
         -*)
             error_exit "Unknown option: $1 (use -h for help)"
             ;;
@@ -79,51 +113,90 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$FILE" ]]; then
+if [[ -z "$FILE" && "$LIST_SERVERS" != true ]]; then
     print_usage
     exit 0
 fi
 
-# --- File Existence and Readability Check ---
-if [[ ! -f "$FILE" ]]; then
-    error_exit "File '$FILE' does not exist."
-elif [[ ! -r "$FILE" ]]; then
-    error_exit "File '$FILE' exists but is not readable."
+# --- Server-selection mode resolution ---
+# Only one of these makes sense at a time.
+FLAG_COUNT=0
+[[ "$LIST_SERVERS" == true ]] && FLAG_COUNT=$((FLAG_COUNT + 1))
+[[ "$AUTO_FASTEST" == true ]] && FLAG_COUNT=$((FLAG_COUNT + 1))
+[[ "$CHOOSE_SERVER" == true ]] && FLAG_COUNT=$((FLAG_COUNT + 1))
+[[ "$FIRST_SERVER" == true ]] && FLAG_COUNT=$((FLAG_COUNT + 1))
+if [[ "$FLAG_COUNT" -gt 1 ]]; then
+    error_exit "Only one of --auto-fastest, --list-servers, --choose-server, --first-server may be used at a time."
+fi
+
+# As of v1.3.0, --auto-fastest is the default when no server-selection flag
+# is given at all — probing costs a few seconds but generally lands on a
+# closer/less congested server than blindly taking whatever the API lists
+# first. --first-server restores the old zero-overhead behavior.
+SERVER_MODE_IMPLICIT=false
+if [[ "$FLAG_COUNT" -eq 0 ]]; then
+    AUTO_FASTEST=true
+    SERVER_MODE_IMPLICIT=true
 fi
 
 # --- Dependency Check ---
-for cmd in curl jq stat; do
+# curl/jq are needed for every code path, including --list-servers (no file).
+for cmd in curl jq; do
     if ! command -v "$cmd" &>/dev/null; then
         error_exit "Required command '$cmd' is not installed! Please install it."
     fi
 done
 
+# --- File Existence and Readability Check ---
+# Skipped entirely in --list-servers mode, which doesn't take a file.
+if [[ -n "$FILE" ]]; then
+    if [[ ! -f "$FILE" ]]; then
+        error_exit "File '$FILE' does not exist."
+    elif [[ ! -r "$FILE" ]]; then
+        error_exit "File '$FILE' exists but is not readable."
+    fi
+    if ! command -v stat &>/dev/null; then
+        error_exit "Required command 'stat' is not installed! Please install it."
+    fi
+fi
+
 # --- Display File Info ---
-FILE_SIZE_BYTES=$(stat -f%z "$FILE" 2>/dev/null || stat -c%s "$FILE" 2>/dev/null)
-if [[ -z "$FILE_SIZE_BYTES" ]]; then
-    error_exit "Could not determine file size for '$FILE'."
-fi
-FILE_SIZE_HUMAN=$(du -h "$FILE" | cut -f1)
-FILE_NAME=$(basename "$FILE")
+if [[ -n "$FILE" ]]; then
+    FILE_SIZE_BYTES=$(stat -f%z "$FILE" 2>/dev/null || stat -c%s "$FILE" 2>/dev/null)
+    if [[ -z "$FILE_SIZE_BYTES" ]]; then
+        error_exit "Could not determine file size for '$FILE'."
+    fi
+    FILE_SIZE_HUMAN=$(du -h "$FILE" | cut -f1)
+    FILE_NAME=$(basename "$FILE")
 
-echo "File: $FILE_NAME"
-echo "Size: $FILE_SIZE_HUMAN"
-if [[ -n "$TOKEN" ]]; then
-    echo "Account: authenticated (token supplied)"
-else
-    echo "Account: guest (no token — file will be shorter-lived; pass -t/--token to upload to your account)"
-fi
-echo ""
+    echo "File: $FILE_NAME"
+    echo "Size: $FILE_SIZE_HUMAN"
+    if [[ -n "$TOKEN" ]]; then
+        echo "Account: authenticated (token supplied)"
+    else
+        echo "Account: guest (no token — file will be shorter-lived; pass -t/--token to upload to your account)"
+    fi
+    echo ""
 
-# Detect if this is a large file (>500MB) that might take time
-LARGE_FILE=false
-if [[ $FILE_SIZE_BYTES -gt 524288000 ]]; then
-    LARGE_FILE=true
+    # Detect if this is a large file (>500MB) that might take time
+    LARGE_FILE=false
+    if [[ $FILE_SIZE_BYTES -gt 524288000 ]]; then
+        LARGE_FILE=true
+    fi
 fi
 
 # --- GoFile API Interaction ---
 
 echo "Fetching best GoFile server..."
+if [[ "$SERVER_MODE_IMPLICIT" == true ]]; then
+    echo "No server-selection flag given — defaulting to --auto-fastest (use --first-server to skip probing)."
+elif [[ "$AUTO_FASTEST" == true ]]; then
+    echo "Using --auto-fastest as requested."
+elif [[ "$CHOOSE_SERVER" == true ]]; then
+    echo "Using --choose-server as requested."
+elif [[ "$FIRST_SERVER" == true ]]; then
+    echo "Using --first-server as requested (no latency probing)."
+fi
 
 # Separate temp files for response body and stderr, so error output never
 # leaks into the JSON we hand to jq.
@@ -150,19 +223,94 @@ check_api_error() {
 
 check_api_error "$TEMP_FILE" "fetching server list"
 
-# Parse the server response (stdout only — stderr is captured separately above)
-if ! SERVER=$(jq -r '.data.servers[0].name' "$TEMP_FILE" 2>"$STDERR_FILE"); then
-    echo "API Response:" >&2
-    cat "$TEMP_FILE" >&2
-    echo "jq error:" >&2
-    cat "$STDERR_FILE" >&2
-    error_exit "Failed to parse GoFile API response! The API might have returned unexpected data."
-fi
+# --- Server selection ---
+#
+# Default (no flag): behave exactly like before — take the first server the
+# API lists, zero extra overhead. The flags below are opt-in and add a
+# latency probe against each candidate server before picking one.
+if [[ "$LIST_SERVERS" == true || "$AUTO_FASTEST" == true || "$CHOOSE_SERVER" == true ]]; then
+    mapfile -t SERVER_NAMES < <(jq -r '.data.servers[].name' "$TEMP_FILE" 2>"$STDERR_FILE")
+    if [[ "${#SERVER_NAMES[@]}" -eq 0 || -z "${SERVER_NAMES[0]}" ]]; then
+        echo "API Response:" >&2
+        cat "$TEMP_FILE" >&2
+        error_exit "Failed to retrieve any server names from GoFile API."
+    fi
 
-if [[ -z "$SERVER" || "$SERVER" == "null" ]]; then
-    echo "API Response:" >&2
-    cat "$TEMP_FILE" >&2
-    error_exit "Failed to retrieve valid server name from GoFile API! No servers available."
+    echo "Probing ${#SERVER_NAMES[@]} GoFile server(s) for connection latency..." >&2
+
+    # EXPERIMENTAL: this measures TCP connect time only (how fast a
+    # connection opens), not actual upload throughput. It's a reasonable
+    # proxy for "closest/least congested server" but it is not a guarantee
+    # of the fastest transfer — real upload speed also depends on your own
+    # uplink bandwidth, which no server choice can get around.
+    RANKED_LINES=()
+    for name in "${SERVER_NAMES[@]}"; do
+        t=$(curl -o /dev/null -s -w '%{time_connect}' --connect-timeout 2 --max-time 4 \
+            "https://${name}.gofile.io/" 2>/dev/null) || t=""
+        [[ -z "$t" ]] && t="9999"
+        RANKED_LINES+=("$t $name")
+    done
+    IFS=$'\n' RANKED_LINES=($(printf '%s\n' "${RANKED_LINES[@]}" | sort -n))
+    unset IFS
+
+    if [[ "$LIST_SERVERS" == true || "$CHOOSE_SERVER" == true ]]; then
+        echo ""
+        printf "  %-4s %-16s %s\n" "#" "SERVER" "CONNECT TIME"
+        i=0
+        for line in "${RANKED_LINES[@]}"; do
+            i=$((i + 1))
+            t="${line%% *}"
+            name="${line#* }"
+            if [[ "$t" == "9999" ]]; then
+                printf "  %-4s %-16s %s\n" "$i)" "$name" "unreachable"
+            else
+                ms=$(awk -v s="$t" 'BEGIN { printf "%.0f", s * 1000 }')
+                printf "  %-4s %-16s %sms\n" "$i)" "$name" "$ms"
+            fi
+        done
+        echo ""
+    fi
+
+    if [[ "$LIST_SERVERS" == true ]]; then
+        exit 0
+    fi
+
+    FASTEST_LINE="${RANKED_LINES[0]}"
+    FASTEST_SERVER="${FASTEST_LINE#* }"
+
+    if [[ "$CHOOSE_SERVER" == true ]]; then
+        if [[ -t 0 ]]; then
+            read -rp "Select a server [1-${#RANKED_LINES[@]}] (default 1, fastest): " CHOICE
+            CHOICE="${CHOICE:-1}"
+            if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > ${#RANKED_LINES[@]} )); then
+                error_exit "Invalid selection: $CHOICE"
+            fi
+            CHOSEN_LINE="${RANKED_LINES[$((CHOICE - 1))]}"
+            SERVER="${CHOSEN_LINE#* }"
+        else
+            echo "Not running interactively — using fastest server (${FASTEST_SERVER})." >&2
+            SERVER="$FASTEST_SERVER"
+        fi
+    else
+        # --auto-fastest
+        SERVER="$FASTEST_SERVER"
+    fi
+else
+    # --first-server (or, pre-v1.3.0, the only behavior that existed):
+    # no probing, just take the first listed server.
+    if ! SERVER=$(jq -r '.data.servers[0].name' "$TEMP_FILE" 2>"$STDERR_FILE"); then
+        echo "API Response:" >&2
+        cat "$TEMP_FILE" >&2
+        echo "jq error:" >&2
+        cat "$STDERR_FILE" >&2
+        error_exit "Failed to parse GoFile API response! The API might have returned unexpected data."
+    fi
+
+    if [[ -z "$SERVER" || "$SERVER" == "null" ]]; then
+        echo "API Response:" >&2
+        cat "$TEMP_FILE" >&2
+        error_exit "Failed to retrieve valid server name from GoFile API! No servers available."
+    fi
 fi
 
 echo "Using GoFile server: ${SERVER}"

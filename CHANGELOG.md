@@ -2,6 +2,23 @@
 
 All notable changes to this script are documented here.
 
+## [1.3.0]
+
+### Added
+- Latency-based server selection, probed live against GoFile's current API-returned server list on every run (no caching, no hardcoded servers):
+  - `--list-servers` — probes all available servers, prints a table ranked by connection latency, and exits without uploading. Doesn't require a file argument.
+  - `--auto-fastest` — probes all servers and uploads to the lowest-latency one.
+  - `--choose-server` — probes all servers, shows the ranked table, and prompts for a manual pick. Falls back to the fastest server automatically when stdin isn't a terminal (e.g. run from a non-interactive script or piped from `curl | bash` without a tty).
+  - `--first-server` — explicit opt-out of probing; restores the pre-1.3.0 behavior of taking whichever server the API lists first, with zero added overhead.
+- **`--auto-fastest` is now the default** when no server-selection flag is passed at all. The script logs this explicitly (`No server-selection flag given — defaulting to --auto-fastest...`) so the behavior isn't silent.
+- Validation that only one server-selection flag is used at a time; combining e.g. `--auto-fastest` and `--first-server` now errors clearly instead of picking one arbitrarily.
+
+### Changed
+- Default upload behavior now takes a few extra seconds up front (probing latency to each server) compared to pre-1.3.0. Use `--first-server` to skip this if you want the old instant behavior.
+
+### Notes
+- The latency probe measures TCP connect time only — a reasonable proxy for "closest / least congested server," not a guarantee of upload throughput. Actual transfer speed is still bounded by your own uplink bandwidth. Tested against the live GoFile API (13 servers returned, mix of anycast `storeN` and geo-named `eu-par`/`na-phx` servers); ranking is dynamic and can shift between runs based on real-time network conditions.
+
 ## [1.2.0]
 
 ### Added

@@ -1,15 +1,15 @@
 # GoFile Upload Script
 
-A robust bash script to upload files to GoFile.io with automatic server selection and download link generation. Optimized for large files (1-4 GB) with smart progress indicators and comprehensive error handling.
+A robust bash script to upload files to GoFile.io with automatic latency-based server selection and download link generation. Optimized for large files (1-4 GB) with smart progress indicators and comprehensive error handling.
 
 ## Features
 
+- ✅ **Fastest-Server Selection (default)** - Probes all available GoFile servers by connection latency and automatically uploads to the closest/least congested one
 - ✅ **Smart File Detection** - Automatically detects file size and shows appropriate upload time estimates
 - ✅ **Memory Optimized** - Uses temporary files to handle large uploads without consuming excessive RAM
-- ✅ **Automatic Server Selection** - Queries GoFile API to find the best available server
-- ✅ **Progress Tracking** - Shows upload progress with visual progress bar
 - ✅ **Optional Account Upload** - Supply your GoFile API token to tie uploads to your account instead of uploading as a guest
 - ✅ **Retry on Transient Failures** - Automatically retries the server-list and upload requests on connection hiccups
+- ✅ **Progress Tracking** - Shows upload progress with a visual progress bar
 - ✅ **Robust Error Handling** - Comprehensive checks with detailed error messages, including GoFile's own API error responses
 - ✅ **Automatic Cleanup** - Removes temporary files even if the script crashes or is interrupted (Ctrl-C)
 - ✅ **Cross-Platform** - Works on Linux and macOS
@@ -24,116 +24,179 @@ A robust bash script to upload files to GoFile.io with automatic server selectio
 ### Installing Dependencies
 
 **Ubuntu/Debian:**
-```
+```bash
 sudo apt update
 sudo apt install curl jq
 ```
 
 **macOS:**
-```
+```bash
 brew install curl jq
 ```
 
 **Fedora/RHEL:**
-```
+```bash
 sudo dnf install curl jq
 ```
 
 **Arch Linux:**
-```
+```bash
 sudo pacman -S curl jq
 ```
 
 ## Installation
 
-### Method 1: Download the Script
+There are two common ways to use this script — pick whichever fits your workflow.
 
-```
+### Option A: Download and Keep Locally (recommended)
+
+Best if you'll be uploading files regularly, want to inspect the script before running it, or want to use `-h`/`--help` and version info without re-downloading each time.
+
+```bash
 curl -o upload.sh https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
 chmod +x upload.sh
 ```
 
-### Method 2: Quick Use (Without Downloading)
-
+Then run it from wherever you downloaded it:
+```bash
+./upload.sh /path/to/your/file.zip
 ```
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- /path/to/your/file.zip
-```
 
-> **Note:** piping a remote script straight into `bash` means you're trusting whatever's currently at that URL. Prefer Method 1 (download, inspect, then run) if that matters to you.
-
-### Method 3: Install Globally
-
-```
+**Install it globally** (so you can run `gofile-upload` from any directory):
+```bash
 sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
 sudo chmod +x /usr/local/bin/gofile-upload
 gofile-upload /path/to/file.zip
 ```
 
+### Option B: Run Directly via `curl | bash` (no download step)
+
+Convenient for one-off uploads or CI scripts, at the cost of trusting whatever is currently at that URL — you're piping a remote script straight into `bash` without inspecting it first. If that matters to you, use Option A instead.
+
+```bash
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- /path/to/your/file.zip
+```
+
+Flags work the same way — put them after `-s --`:
+```bash
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- --list-servers
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- -t "$GOFILE_TOKEN" backup.tar.gz
+```
+
+> **Note:** `--choose-server` (the interactive picker) works fine over `curl | bash` too, as long as you're running it in an actual terminal — the script detects whether stdin is interactive and falls back to the fastest server automatically if it isn't (e.g. if you're running this from a non-interactive script or cron job).
+
 ## Usage
+
+```
+Usage: upload.sh [-t TOKEN] [server-selection flag] <file_path>
+
+  -t, --token TOKEN   GoFile account API token (ties the upload to your
+                      account instead of uploading as a guest).
+                      Can also be set via the GOFILE_TOKEN env var,
+                      which avoids the token showing up in shell
+                      history or 'ps' output.
+  -h, --help          Show this help message.
+
+  Server selection (default is --auto-fastest; adds a few seconds
+  up front to probe connection latency to each GoFile server):
+  --auto-fastest      (Default) Probe all servers and upload to the
+                      lowest-latency one. No need to pass this
+                      explicitly — it's used automatically when no
+                      other server-selection flag is given.
+  --list-servers      List available servers ranked by latency and exit
+                      (no file required, no upload performed).
+  --choose-server     Probe all servers, show the ranked list, and
+                      prompt you to pick one interactively.
+  --first-server      Skip probing entirely — use whichever server
+                      the GoFile API happens to list first (the old
+                      zero-overhead default from before v1.3.0).
+```
 
 ### Basic Usage
 
-```
-./upload.sh [-t TOKEN] <file_path>
+Just point it at a file — as of v1.3.0, it automatically probes and uploads to the fastest available server:
+
+```bash
+./upload.sh /path/to/your/file.zip
 ```
 
+### Server Selection
+
+**See which server is fastest from your connection, without uploading anything:**
+```bash
+./upload.sh --list-servers
 ```
-./upload.sh --help
 ```
+Probing 13 GoFile server(s) for connection latency...
+  #    SERVER           CONNECT TIME
+  1)   store1           166ms
+  2)   store-eu-par-8   176ms
+  3)   store-eu-par-6   179ms
+  ...
+```
+
+**Pick a server yourself, interactively:**
+```bash
+./upload.sh --choose-server backup.tar.gz
+```
+
+**Skip probing entirely (old default, zero extra overhead):**
+```bash
+./upload.sh --first-server backup.tar.gz
+```
+
+> **What the latency probe actually measures:** TCP connect time to each server — a reasonable proxy for "closest / least congested," similar in spirit to a ping. It is *not* a guarantee of the fastest transfer speed; your actual upload throughput is still capped by your own internet uplink bandwidth, which no server choice can change. On most connections the difference between servers is a modest latency improvement, not a dramatic speed boost.
 
 ### Uploading to Your GoFile Account (Optional)
 
-By default, files are uploaded as a guest — GoFile applies shorter retention and lower rate limits to guest uploads. If you have a GoFile account, you can pass your API token to tie the upload to it:
+By default, files are uploaded as a guest — GoFile applies shorter retention and lower rate limits to guest uploads. If you have a GoFile account, pass your API token to tie the upload to it:
 
-```
+```bash
 ./upload.sh -t YOUR_GOFILE_TOKEN backup.tar.gz
 ```
 
-Or, preferred for scripting since it avoids the token showing up in shell history or `ps` output:
+Or, preferred for scripting since it keeps the token out of shell history and `ps` output:
 
-```
+```bash
 export GOFILE_TOKEN=YOUR_GOFILE_TOKEN
 ./upload.sh backup.tar.gz
 ```
 
-Find your token at: **GoFile.io → Account → API Token**. Treat it like a password — anyone with it can upload, and potentially manage, content in your account.
+Find your token at: **GoFile.io → Account → API Token**. Treat it like a password — anyone with it can upload to (and potentially manage content in) your account.
 
-> **Note on GoFile's API docs:** publicly available documentation is inconsistent about whether the token should be sent as a form field or an `Authorization: Bearer` header. This script sends it both ways so it works regardless of which one GoFile's current backend actually reads. If your token is rejected, the script will now show GoFile's own error message rather than a generic parse failure.
+> **Note on GoFile's API docs:** publicly available documentation is inconsistent about whether the token should be sent as a form field or an `Authorization: Bearer` header. This script sends it both ways so it works regardless of which one GoFile's current backend actually reads. If your token is rejected, the script shows GoFile's own error message rather than a generic parse failure.
 
-### Examples
+### More Examples
 
-**Upload a custom ROM:**
-```
+**Upload a custom ROM (auto-fastest by default):**
+```bash
 ./upload.sh lineage-20-pixel6-4.2GB.zip
 ```
 
-**Upload a compressed archive to your account:**
-```
-./upload.sh -t YOUR_TOKEN backup.tar.gz
-```
-
-**Upload a PDF document:**
-```
-./upload.sh presentation.pdf
+**Upload a compressed archive to your account, skipping the latency probe:**
+```bash
+./upload.sh -t YOUR_TOKEN --first-server backup.tar.gz
 ```
 
-**Upload a video file:**
-```
-./upload.sh recording.mp4
+**Upload via `curl | bash` with a token from an env var:**
+```bash
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- -t "$GOFILE_TOKEN" recording.mp4
 ```
 
 ## Output Example
 
 ```
-File: lineage-20-pixel6-4.2GB.zip
-Size: 4.2G
+File: lineage-22.2-20260809-UNOFFICIAL-sapphire.zip
+Size: 2.1G
 Account: guest (no token — file will be shorter-lived; pass -t/--token to upload to your account)
 
 Fetching best GoFile server...
-Using GoFile server: store3
+No server-selection flag given — defaulting to --auto-fastest (use --first-server to skip probing).
+Probing 13 GoFile server(s) for connection latency...
+Using GoFile server: store1
 
-Uploading file 'lineage-20-pixel6-4.2GB.zip' to GoFile...
-This is a large file - upload may take 5-15+ minutes...
+Uploading file 'lineage-22.2-20260809-UNOFFICIAL-sapphire.zip' to GoFile...
+This is a large file - upload may take 10-30 minutes...
 
 ######################################################################## 100.0%
 
@@ -143,12 +206,12 @@ Download Link: https://gofile.io/d/abc123
 
 ## Upload Time Estimates
 
-The script provides intelligent time estimates based on file size:
-
 - **< 500MB**: Quick upload (seconds to minutes)
 - **500MB - 1GB**: A few minutes
 - **1GB - 3GB**: 10-30 minutes
 - **> 3GB**: 15-60+ minutes (depending on connection speed)
+
+These are rough estimates based on file size alone — your actual time depends heavily on your upload bandwidth (see the note on server selection above).
 
 ## Error Handling
 
@@ -158,9 +221,10 @@ The script includes comprehensive error handling for:
 - ❌ Missing dependencies (curl, jq, stat)
 - ❌ GoFile API connection failures (with automatic retry)
 - ❌ GoFile API error responses (e.g. an invalid token), surfaced with GoFile's own error message
-- ❌ Server selection issues
+- ❌ Server selection issues, including all probed servers being unreachable
 - ❌ Upload failures
 - ❌ Invalid API responses
+- ❌ Conflicting server-selection flags (e.g. `--auto-fastest --first-server` together)
 
 All errors provide detailed messages to help troubleshoot issues. Temporary files are always cleaned up, even on Ctrl-C or an unexpected crash.
 
@@ -178,7 +242,7 @@ Install the missing dependency using your package manager (see Requirements sect
 
 ### "GoFile API error while ..."
 
-- This means GoFile's API responded successfully but reported an error (for example, an invalid or expired token). The message shown is GoFile's own error text — check it for the specific cause.
+This means GoFile's API responded successfully but reported an error (for example, an invalid or expired token). The message shown is GoFile's own error text — check it for the specific cause.
 
 ### "File upload failed"
 
@@ -187,11 +251,16 @@ Install the missing dependency using your package manager (see Requirements sect
 - Verify you have sufficient internet bandwidth
 - If using `-t`/`--token`, the token may have been rejected — try without it to confirm
 
+### Upload seems stuck / no progress showing
+
+The progress bar (`#####`) writes to the terminal directly. If you don't see it moving for a large file, it's very likely still working — GoFile's servers can be slow to acknowledge multi-GB uploads. Give it a few minutes before assuming it's hung; if you interrupt with Ctrl-C, temporary files are cleaned up automatically.
+
 ### Upload is very slow
 
 - Large files naturally take longer
+- Try `--list-servers` to check whether a closer server is available, then upload with `--auto-fastest` (the default) or manually with `--choose-server`
 - Check your upload speed:
-```
+```bash
 sudo apt install speedtest-cli
 speedtest-cli
 ```
@@ -201,12 +270,13 @@ speedtest-cli
 
 ### How It Works
 
-1. Parses arguments (file path, optional token)
+1. Parses arguments (file path, optional token, optional server-selection flag)
 2. Validates file existence and readability
 3. Checks for required dependencies
-4. Queries GoFile API for the best server
-5. Uploads file with progress tracking, optionally authenticated with your token
-6. Extracts and displays the download link, or GoFile's error message on failure
+4. Queries the GoFile API for the list of available servers
+5. Selects a server — probing all of them by latency and picking the fastest (default), letting you choose interactively, listing them without uploading, or skipping probing entirely, depending on flags
+6. Uploads the file with progress tracking, optionally authenticated with your token
+7. Extracts and displays the download link, or GoFile's error message on failure
 
 ### Memory Usage
 
@@ -246,10 +316,10 @@ If you encounter any issues or have questions:
 2. Open an issue on GitHub
 3. Ensure you're using the latest version of the script
 
-### Credits:
+### Credits
 
 - <https://gofile.io> - For the Amazing Website to upload Unlimited files with Unlimited filesize to fast servers, for free!
-- [Sushrut1101](https://github.com/Sushrut1101) - To make the Script
+- [Sushrut1101](https://github.com/Sushrut1101) - To make the original Script
 
 ---
 
