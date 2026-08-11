@@ -1,9 +1,12 @@
 #!/bin/bash
 set -e # Exit immediately if a command exits with a non-zero status.
+set -o pipefail
 
 # --- Script Information ---
 # This script uploads a specified file to GoFile.io and displays the download link.
 # Optimized for large files (e.g., compressed files, images, ROMs 1-4 GB).
+
+VERSION="1.2.0"
 
 # --- Error Handling Function ---
 # A function to print error messages to stderr and exit.
@@ -11,24 +14,77 @@ error_exit() {
     echo "ERROR: $1" >&2
     # Clean up temp files on error
     [[ -n "$TEMP_FILE" ]] && rm -f "$TEMP_FILE"
+    [[ -n "$STDERR_FILE" ]] && rm -f "$STDERR_FILE"
     exit 1
 }
 
 # --- Cleanup trap ---
-# Ensure temp files are cleaned up on exit
-trap '[[ -n "$TEMP_FILE" ]] && rm -f "$TEMP_FILE"' EXIT
+# Ensure temp files are cleaned up on exit (success, error, or interrupt)
+cleanup() {
+    # Capture the exit status we were called with — otherwise the trap's
+    # own [[ ]] tests overwrite $?, and callers see the wrong exit code
+    # (e.g. -h/--help would report failure even though it printed fine).
+    local exit_code=$?
+    [[ -n "$TEMP_FILE" ]] && rm -f "$TEMP_FILE"
+    [[ -n "$STDERR_FILE" ]] && rm -f "$STDERR_FILE"
+    exit "$exit_code"
+}
+trap cleanup EXIT INT TERM
 
-# --- Argument Check ---
-# Check if a file argument is provided.
-if [[ "$#" -eq 0 ]]; then
-    error_exit "No file specified! Usage: $0 <file_path>"
+# --- Argument Parsing ---
+# Token can come from -t/--token, or the GOFILE_TOKEN env var (preferred for
+# scripting, since it keeps the token out of shell history / process list).
+TOKEN="${GOFILE_TOKEN:-}"
+FILE=""
+
+print_usage() {
+    echo "GoFile Upload Script v${VERSION}"
+    echo "Usage: $0 [-t TOKEN] <file_path>"
+    echo ""
+    echo "  -t, --token TOKEN   GoFile account API token (ties the upload to your"
+    echo "                      account instead of uploading as a guest)."
+    echo "                      Can also be set via the GOFILE_TOKEN env var,"
+    echo "                      which avoids the token showing up in shell"
+    echo "                      history or 'ps' output."
+    echo "  -h, --help          Show this help message."
+    echo ""
+    echo "Find your token at: GoFile.io -> Account -> API Token"
+}
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            print_usage
+            exit 0
+            ;;
+        -t|--token)
+            [[ -n "${2:-}" ]] || error_exit "Missing value for $1"
+            TOKEN="$2"
+            shift 2
+            ;;
+        --token=*)
+            TOKEN="${1#*=}"
+            shift
+            ;;
+        -*)
+            error_exit "Unknown option: $1 (use -h for help)"
+            ;;
+        *)
+            if [[ -n "$FILE" ]]; then
+                error_exit "Only one file may be uploaded at a time (use -h for help)"
+            fi
+            FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$FILE" ]]; then
+    print_usage
+    exit 0
 fi
 
-# Store the file path.
-FILE="$1"
-
 # --- File Existence and Readability Check ---
-# Verify that the specified file exists and is readable.
 if [[ ! -f "$FILE" ]]; then
     error_exit "File '$FILE' does not exist."
 elif [[ ! -r "$FILE" ]]; then
@@ -36,8 +92,7 @@ elif [[ ! -r "$FILE" ]]; then
 fi
 
 # --- Dependency Check ---
-# Check for required commands (curl and jq).
-for cmd in curl jq; do
+for cmd in curl jq stat; do
     if ! command -v "$cmd" &>/dev/null; then
         error_exit "Required command '$cmd' is not installed! Please install it."
     fi
@@ -45,11 +100,19 @@ done
 
 # --- Display File Info ---
 FILE_SIZE_BYTES=$(stat -f%z "$FILE" 2>/dev/null || stat -c%s "$FILE" 2>/dev/null)
+if [[ -z "$FILE_SIZE_BYTES" ]]; then
+    error_exit "Could not determine file size for '$FILE'."
+fi
 FILE_SIZE_HUMAN=$(du -h "$FILE" | cut -f1)
 FILE_NAME=$(basename "$FILE")
 
 echo "File: $FILE_NAME"
 echo "Size: $FILE_SIZE_HUMAN"
+if [[ -n "$TOKEN" ]]; then
+    echo "Account: authenticated (token supplied)"
+else
+    echo "Account: guest (no token — file will be shorter-lived; pass -t/--token to upload to your account)"
+fi
 echo ""
 
 # Detect if this is a large file (>500MB) that might take time
@@ -60,46 +123,54 @@ fi
 
 # --- GoFile API Interaction ---
 
-# Query GoFile API to find the best server.
 echo "Fetching best GoFile server..."
 
-# Create temp file for server response
+# Separate temp files for response body and stderr, so error output never
+# leaks into the JSON we hand to jq.
 TEMP_FILE=$(mktemp) || error_exit "Failed to create temporary file!"
+STDERR_FILE=$(mktemp) || error_exit "Failed to create temporary file!"
 
-# Fetch server list to temp file
-if ! curl -s --fail --connect-timeout 10 --max-time 30 \
-    https://api.gofile.io/servers -o "$TEMP_FILE" 2>&1; then
-    rm -f "$TEMP_FILE"
+if ! curl -s --fail --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 \
+    https://api.gofile.io/servers -o "$TEMP_FILE" 2>"$STDERR_FILE"; then
+    echo "curl error output:" >&2
+    cat "$STDERR_FILE" >&2
     error_exit "Failed to connect to GoFile API! Please check your internet connection."
 fi
 
-# Parse the server response
-SERVER=$(jq -r '.data.servers[0].name' "$TEMP_FILE" 2>&1)
-JQ_EXIT=$?
+# GoFile's API can return {"status":"error","message":"..."} — surface that
+# message directly instead of just saying a field was missing/null.
+check_api_error() {
+    local resp_file="$1" context="$2" status msg
+    status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null)
+    if [[ "$status" == "error" ]]; then
+        msg=$(jq -r '.message // "no message provided by the API"' "$resp_file" 2>/dev/null)
+        error_exit "GoFile API error while $context: $msg"
+    fi
+}
 
-# Check if jq parsing succeeded
-if [[ $JQ_EXIT -ne 0 ]]; then
+check_api_error "$TEMP_FILE" "fetching server list"
+
+# Parse the server response (stdout only — stderr is captured separately above)
+if ! SERVER=$(jq -r '.data.servers[0].name' "$TEMP_FILE" 2>"$STDERR_FILE"); then
     echo "API Response:" >&2
     cat "$TEMP_FILE" >&2
-    rm -f "$TEMP_FILE"
+    echo "jq error:" >&2
+    cat "$STDERR_FILE" >&2
     error_exit "Failed to parse GoFile API response! The API might have returned unexpected data."
 fi
 
-# Validate server name.
 if [[ -z "$SERVER" || "$SERVER" == "null" ]]; then
     echo "API Response:" >&2
     cat "$TEMP_FILE" >&2
-    rm -f "$TEMP_FILE"
     error_exit "Failed to retrieve valid server name from GoFile API! No servers available."
 fi
 
 echo "Using GoFile server: ${SERVER}"
 echo ""
 
-# Upload the file to GoFile.
+# --- Upload ---
 echo "Uploading file '$FILE_NAME' to GoFile..."
 
-# Show appropriate message based on file size
 if [[ $LARGE_FILE == true ]]; then
     if [[ $FILE_SIZE_BYTES -gt 3221225472 ]]; then  # >3GB
         echo "This is a very large file - upload may take 15-60+ minutes..."
@@ -113,8 +184,7 @@ else
 fi
 echo ""
 
-# Use temp file for upload response to avoid storing large responses in memory
-# Increased timeout based on file size:
+# Timeout scales with file size:
 # - Files < 1GB: 600s (10 min)
 # - Files 1-3GB: 1800s (30 min)
 # - Files > 3GB: 3600s (60 min)
@@ -125,35 +195,46 @@ elif [[ $FILE_SIZE_BYTES -gt 1073741824 ]]; then  # >1GB
     UPLOAD_TIMEOUT=1800
 fi
 
-if ! curl -# --fail --connect-timeout 30 --max-time $UPLOAD_TIMEOUT \
-    -F "file=@$FILE" "https://${SERVER}.gofile.io/uploadFile" \
-    -o "$TEMP_FILE" 2>&1; then
-    rm -f "$TEMP_FILE"
-    error_exit "File upload failed! The file might be too large, the server is unavailable, or your connection is too slow."
+# --retry only helps with connection-establishment failures, not a drop
+# mid-upload, but it's a cheap safety net for flaky networks.
+# NOTE: stderr is left going to the terminal here (not captured to a file)
+# so the -# progress bar stays visible. This curl call's output isn't
+# captured into a variable, so there's no risk of it corrupting JSON
+# parsing the way the server-list fetch was — that's what the earlier
+# STDERR_FILE fix was actually for.
+#
+# GoFile's own docs are inconsistent about whether the token is expected as
+# a form field or an Authorization header — different doc sources show
+# different things. Sending both is harmless if only one is actually read,
+# and avoids guessing wrong. curl -F/-H args never get echoed anywhere by
+# this script, so the token doesn't leak into the visible output.
+UPLOAD_ARGS=(-F "file=@${FILE}")
+if [[ -n "$TOKEN" ]]; then
+    UPLOAD_ARGS+=(-F "token=${TOKEN}" -H "Authorization: Bearer ${TOKEN}")
 fi
 
-# Parse the upload response
-LINK=$(jq -r '.data.downloadPage' "$TEMP_FILE" 2>&1)
-JQ_EXIT=$?
+if ! curl -# --fail --connect-timeout 30 --max-time "$UPLOAD_TIMEOUT" --retry 2 --retry-delay 5 \
+    "${UPLOAD_ARGS[@]}" "https://${SERVER}.gofile.io/uploadFile" \
+    -o "$TEMP_FILE"; then
+    error_exit "File upload failed! The file might be too large, the server is unavailable, your connection is too slow, or (if using -t/--token) the token was rejected."
+fi
 
-# Check if jq parsing succeeded
-if [[ $JQ_EXIT -ne 0 ]]; then
+check_api_error "$TEMP_FILE" "uploading file"
+
+# Parse the upload response
+if ! LINK=$(jq -r '.data.downloadPage' "$TEMP_FILE" 2>"$STDERR_FILE"); then
     echo "Upload Response:" >&2
     cat "$TEMP_FILE" >&2
-    rm -f "$TEMP_FILE"
+    echo "jq error:" >&2
+    cat "$STDERR_FILE" >&2
     error_exit "Failed to parse upload response! The API might have returned unexpected data."
 fi
 
-# Validate download link.
 if [[ -z "$LINK" || "$LINK" == "null" ]]; then
     echo "Upload Response:" >&2
     cat "$TEMP_FILE" >&2
-    rm -f "$TEMP_FILE"
     error_exit "Failed to retrieve download link! Check the API response above for details."
 fi
-
-# Clean up temp file
-rm -f "$TEMP_FILE"
 
 # --- Success Output ---
 echo ""
