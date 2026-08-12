@@ -12,14 +12,41 @@ A robust bash script to upload files to GoFile.io with automatic latency-based s
 - ✅ **Progress Tracking** - Shows upload progress with a visual progress bar
 - ✅ **Robust Error Handling** - Comprehensive checks with detailed error messages, including GoFile's own API error responses
 - ✅ **Automatic Cleanup** - Removes temporary files even if the script crashes or is interrupted (Ctrl-C)
-- ✅ **Cross-Platform** - Works on Linux and macOS
+- ⚠️ **Linux and macOS only** - not natively supported on Windows; see [Supported Operating Systems](#supported-operating-systems) below
+
+## Supported Operating Systems
+
+| OS | Supported | Notes |
+|---|---|---|
+| Linux | ✅ Yes | Primary target platform |
+| macOS | ✅ Yes | Uses the `stat -f%z` fallback for file size |
+| Windows (native) | ❌ No | This is a bash script — it will **not** run in cmd.exe or PowerShell as-is |
+| Windows via WSL | ✅ Yes | Works like a normal Linux install — see below |
+
+### Windows Users: Use WSL
+
+This script does not run natively on Windows. If you're on Windows, install **WSL (Windows Subsystem for Linux)**, which gives you a real Linux environment to run it in exactly as documented in this README:
+
+```powershell
+wsl --install
+```
+
+Then open the WSL terminal (e.g. Ubuntu) and install the dependencies as normal:
+```bash
+sudo apt update
+sudo apt install curl jq
+```
+
+From there, follow the Linux instructions below — everything works the same inside WSL, including file paths like `/mnt/c/Users/YourName/Downloads/file.zip` for accessing files on your Windows drives.
+
+> A native Windows (PowerShell/batch) version is not currently planned in the near term — batch scripting is too limited for this script's JSON parsing and error handling, and a proper port would likely need to be written in PowerShell as a separate effort rather than a quick translation. WSL is the recommended path for Windows users until/unless that happens.
 
 ## Requirements
 
 - `bash` (4.0+)
 - `curl` - For making HTTP requests
 - `jq` - For parsing JSON responses
-- `stat` - For determining file size (present by default on Linux/macOS)
+- `stat` - For determining file size (present by default on Linux/macOS, and inside WSL)
 
 ### Installing Dependencies
 
