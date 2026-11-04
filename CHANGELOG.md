@@ -2,6 +2,30 @@
 
 All notable changes to this script are documented here.
 
+## [1.4.0]
+
+### Added
+- `-q` / `--quiet`: no progress bar or messages; only the download link(s) go to stdout (errors still go to stderr), so `LINK=$(./upload.sh -q file.zip)` works. Not combinable with `--choose-server`.
+- **Multiple files** in one run (`./upload.sh a.zip b.zip`). All files are checked up front. `-s` / `--single-folder` puts them into one folder that shares a single link (the first upload creates the folder; later files are added to it). `--folder ID` uploads into an existing folder.
+- `-r` / `--retries N` (default 3): the whole upload is retried on a freshly picked server. Server-side errors (HTTP 5xx / 429), curl failures and connection problems are retried; client errors (e.g. a rejected token) are not. This replaces curl's own `--retry` on the upload.
+- `-c` / `--verify`: compares the local MD5 with the one GoFile returns and fails on a mismatch (warns if GoFile returns none).
+- `--limit-rate RATE`: caps the upload speed (passed to curl).
+- `--version`.
+- `test/`: a test suite that runs the script against a fake GoFile API (`bash test/run.sh`), and a GitHub Actions workflow that runs ShellCheck and the tests on every push.
+- `GOFILE_RETRY_DELAY` environment variable (seconds between retries, default 5), mainly for tests.
+
+### Changed
+- Running with no arguments now prints the usage to stderr and **exits 1** (it used to exit 0, which made scripts think it had worked).
+- If every latency probe fails, `--auto-fastest` / `--choose-server` now warn and fall back to the first server GoFile listed, instead of treating an arbitrary unreachable server as "fastest".
+- `--` ends option parsing, so file names starting with `-` work.
+- README: install URLs are pinned to the release tag (`v1.4.0`), plus documentation for the new options and a corrected Memory Usage section.
+
+### Fixed
+- If both `stat` variants failed, `set -e` exited silently before the "could not determine file size" message; the message is now shown.
+
+### Notes
+- `-s`, `--folder` and `-c` rely on GoFile's response containing `parentFolder` / `guestToken` / `md5`, and on the upload accepting a `folderId` field. The script degrades gracefully (warns and carries on) if a field is missing, but this has only been tested against a fake API, not the live service.
+
 ## [1.3.1]
 
 ### Fixed

@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: bash -n upload.sh
+      - name: ShellCheck
+        run: shellcheck upload.sh test/run.sh test/shim/curl
+      - name: Tests (fake GoFile API, no network)
+        run: bash test/run.sh

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Test shim for test/run.sh: logs the arguments curl is called with (this is
+# what `ps` would show to other users) and redirects GoFile's URLs to the local
+# fake API. Everything else is passed straight to the real curl.
+real=$(PATH="${PATH#*:}" command -v curl)
+printf '%s\n' "$@" >> "${ARGV_LOG:-/dev/null}"
+base="http://127.0.0.1:${MOCK_PORT:-8766}"
+args=()
+for a in "$@"; do
+    case "$a" in
+        https://api.gofile.io/servers) a="$base/servers" ;;
+        https://*.gofile.io/uploadFile) a="$base/${MOCK_MODE:-ok}" ;;
+        https://*.gofile.io/)
+            if [[ -n "${PROBE_FAIL:-}" ]]; then a="http://127.0.0.1:1/"; else a="$base/"; fi
+            ;;
+    esac
+    args+=("$a")
+done
+exec "$real" "${args[@]}"

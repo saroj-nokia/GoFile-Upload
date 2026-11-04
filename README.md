@@ -8,7 +8,11 @@ A robust bash script to upload files to GoFile.io with automatic latency-based s
 - ✅ **Smart File Detection** - Automatically detects file size and shows appropriate upload time estimates
 - ✅ **Large-File Friendly** - Streams the file straight from disk (the temp files only hold small JSON responses) and has no fixed time limit: an upload is aborted only if the transfer stalls (under 1 KB/s for 120 s)
 - ✅ **Optional Account Upload** - Supply your GoFile API token to tie uploads to your account instead of uploading as a guest
-- ✅ **Retry on Transient Failures** - Automatically retries the server-list and upload requests on connection hiccups
+- ✅ **Retries** - Retries a failed upload (default 3 attempts, `-r N`), picking a fresh server each time; client errors such as a rejected token are not retried
+- ✅ **Multiple Files** - Upload several files in one run, optionally into one shared folder (`-s`) or an existing one (`--folder`)
+- ✅ **Script-Friendly** - `-q` prints only the download link on stdout, so `LINK=$(./upload.sh -q file.zip)` just works
+- ✅ **Optional Integrity Check** - `-c` compares the local MD5 with the one GoFile reports
+- ✅ **Token Stays Private** - Your API token is handed to curl on stdin, never as a command-line argument, so it isn't visible in `ps`
 - ✅ **Progress Tracking** - Shows upload progress with a visual progress bar
 - ✅ **Robust Error Handling** - Comprehensive checks with detailed error messages, including GoFile's own API error responses
 - ✅ **Automatic Cleanup** - Removes temporary files even if the script crashes or is interrupted (Ctrl-C)
@@ -47,6 +51,7 @@ From there, follow the Linux instructions below — everything works the same in
 - `curl` - For making HTTP requests
 - `jq` - For parsing JSON responses
 - `stat` - For determining file size (present by default on Linux/macOS, and inside WSL)
+- `md5sum` (Linux) or `md5` (macOS) - only needed for `-c`/`--verify`
 
 ### Installing Dependencies
 
@@ -80,9 +85,11 @@ There are two common ways to use this script — pick whichever fits your workfl
 Best if you'll be uploading files regularly, want to inspect the script before running it, or want to use `-h`/`--help` and version info without re-downloading each time.
 
 ```bash
-curl -o upload.sh https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
+curl -o upload.sh https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh
 chmod +x upload.sh
 ```
+
+> The download URLs in this README point at the latest release tag (`v1.4.0`), so you get a known, tested version. Replace `refs/tags/v1.4.0` with `refs/heads/master` if you want the development version.
 
 Then run it from wherever you downloaded it:
 ```bash
@@ -91,7 +98,7 @@ Then run it from wherever you downloaded it:
 
 **Install it globally** (so you can run `gofile-upload` from any directory):
 ```bash
-sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
+sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh
 sudo chmod +x /usr/local/bin/gofile-upload
 gofile-upload /path/to/file.zip
 ```
@@ -101,13 +108,13 @@ gofile-upload /path/to/file.zip
 Convenient for one-off uploads or CI scripts, at the cost of trusting whatever is currently at that URL — you're piping a remote script straight into `bash` without inspecting it first. If that matters to you, use Option A instead.
 
 ```bash
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- /path/to/your/file.zip
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- /path/to/your/file.zip
 ```
 
 Flags work the same way — put them after `-s --`:
 ```bash
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- --list-servers
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- -t "$GOFILE_TOKEN" backup.tar.gz
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- --list-servers
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- -t "$GOFILE_TOKEN" backup.tar.gz
 ```
 
 > **Note:** `--choose-server` (the interactive picker) works fine over `curl | bash` too, as long as you're running it in an actual terminal — the script detects whether stdin is interactive and falls back to the fastest server automatically if it isn't (e.g. if you're running this from a non-interactive script or cron job).
@@ -115,13 +122,27 @@ curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/m
 ## Usage
 
 ```
-Usage: upload.sh [-t TOKEN] [server-selection flag] <file_path>
+GoFile Upload Script v1.4.0
+Usage: upload.sh [options] <file_path> [file_path ...]
 
   -t, --token TOKEN   GoFile account API token (ties the upload to your
                       account instead of uploading as a guest).
                       Can also be set via the GOFILE_TOKEN env var,
-                      which avoids the token showing up in shell
-                      history or 'ps' output.
+                      which keeps it out of shell history. (The token is
+                      never passed to curl as a command-line argument,
+                      so it doesn't show up in 'ps' output either.)
+  -q, --quiet         No progress bar or messages: print only the download
+                      link(s) on stdout, e.g. LINK=$(upload.sh -q file.zip)
+  -r, --retries N     Upload attempts per file (default: 3). Each retry
+                      picks a fresh server.
+  -c, --verify        Compute the local MD5 and compare it with the MD5
+                      GoFile reports for the uploaded file.
+  -s, --single-folder Upload several files into one folder (they share one
+                      download link): files after the first are added to
+                      the folder the first upload created.
+  --folder ID         Upload into an existing folder (needs a token).
+  --limit-rate RATE   Cap the upload speed, e.g. 5M or 500k (passed to curl).
+  --version           Show the version and exit.
   -h, --help          Show this help message.
 
   Server selection (default is --auto-fastest; adds a few seconds
@@ -137,6 +158,8 @@ Usage: upload.sh [-t TOKEN] [server-selection flag] <file_path>
   --first-server      Skip probing entirely — use whichever server
                       the GoFile API happens to list first (the old
                       zero-overhead default from before v1.3.0).
+
+Find your token at: GoFile.io -> Account -> API Token
 ```
 
 ### Basic Usage
@@ -193,6 +216,40 @@ Find your token at: **GoFile.io → Account → API Token**. Treat it like a pas
 
 > **Note on GoFile's API docs:** publicly available documentation is inconsistent about whether the token should be sent as a form field or an `Authorization: Bearer` header. This script sends it both ways so it works regardless of which one GoFile's current backend actually reads. If your token is rejected, the script shows GoFile's own error message rather than a generic parse failure.
 
+### Multiple Files, Scripting, Retries and Verification
+
+**Upload several files in one run** (each gets its own link):
+```bash
+./upload.sh lineage.zip boot.img vendor_boot.img
+```
+
+**Put them all in one folder so they share a single link:**
+```bash
+./upload.sh -s lineage.zip boot.img vendor_boot.img
+```
+The first upload creates the folder; the remaining files are added to it. (If GoFile's response doesn't include a folder id, the script warns and uploads the rest separately.) With an account token you can also target an existing folder with `--folder FOLDER_ID`.
+
+**Use it from scripts** — `-q` suppresses the progress bar and messages and prints only the link on stdout (errors still go to stderr, and the exit code is non-zero on failure):
+```bash
+LINK=$(./upload.sh -q rom.zip) || exit 1
+echo "Download: $LINK"
+```
+
+**Retries:** a failed upload is retried up to 3 times by default, each time on a freshly picked server. Change it with `-r`:
+```bash
+./upload.sh -r 5 backup.tar.gz
+```
+
+**Verify the upload** — compares the MD5 of the local file with the one GoFile reports (computing the MD5 of a multi-GB file takes a few seconds):
+```bash
+./upload.sh -c rom.zip
+```
+
+**Don't saturate your connection:**
+```bash
+./upload.sh --limit-rate 5M rom.zip
+```
+
 ### More Examples
 
 **Upload a custom ROM (auto-fastest by default):**
@@ -207,7 +264,7 @@ Find your token at: **GoFile.io → Account → API Token**. Treat it like a pas
 
 **Upload via `curl | bash` with a token from an env var:**
 ```bash
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- -t "$GOFILE_TOKEN" recording.mp4
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- -t "$GOFILE_TOKEN" recording.mp4
 ```
 
 ## Output Example
@@ -271,8 +328,9 @@ Install the missing dependency using your package manager (see Requirements sect
 
 This means GoFile's API responded successfully but reported an error (for example, an invalid or expired token). The message shown is GoFile's own error text — check it for the specific cause.
 
-### "File upload failed"
+### "Upload of '...' failed after N attempt(s)"
 
+- The script already retried on fresh servers (3 attempts by default) — raise it with `-r 5` if your connection is flaky
 - Ensure the file is not corrupted
 - Check if the file size exceeds GoFile's limits
 - Verify you have sufficient internet bandwidth
@@ -297,26 +355,33 @@ speedtest-cli
 
 ### How It Works
 
-1. Parses arguments (file path, optional token, optional server-selection flag)
-2. Validates file existence and readability
-3. Checks for required dependencies
-4. Queries the GoFile API for the list of available servers
-5. Selects a server — probing all of them by latency and picking the fastest (default), letting you choose interactively, listing them without uploading, or skipping probing entirely, depending on flags
-6. Uploads the file with progress tracking, optionally authenticated with your token
-7. Extracts and displays the download link, or GoFile's error message on failure
+1. Parses arguments (file path(s), optional token, optional server-selection flag, other options)
+2. Validates every file's existence and readability up front, and checks for required dependencies
+3. Queries the GoFile API for the list of available servers
+4. Selects a server — probing all of them by latency and picking the fastest (default), letting you choose interactively, listing them without uploading, or skipping probing entirely, depending on flags
+5. Uploads each file with progress tracking, optionally authenticated with your token; a failed attempt is retried on a fresh server
+6. Checks the API's response, optionally verifies the MD5, and prints the download link — or GoFile's own error message on failure
 
 ### Memory Usage
 
-- Small files (< 500MB): Minimal memory usage
-- Large files (1-4GB): Uses temporary files to avoid high RAM consumption
-- Peak memory: ~50MB regardless of file size
+curl streams the file straight from disk, so memory use stays small no matter how big the file is. The script's temporary files only hold small JSON responses and error text.
 
 ### Security
 
-- API token (if provided) is only ever passed directly to `curl` — never echoed, logged, or written to any file by this script
+- API token (if provided) is handed to `curl` through a config on stdin — never as a command-line argument (so it isn't visible in `ps` or `/proc` to other users), and never echoed, logged, or written to any file by this script
 - Files are uploaded directly to GoFile's servers
 - Temporary files are automatically cleaned up, including on Ctrl-C or crash
 - No data is stored locally after upload
+
+## Development
+
+`test/run.sh` runs the script against a small fake GoFile API (no network, nothing is really uploaded) and checks retries, error handling, token privacy, multi-file uploads and more. It needs `bash`, `curl`, `jq` and `python3`:
+
+```bash
+bash test/run.sh
+```
+
+The same test, plus ShellCheck, runs on every push via GitHub Actions.
 
 ## Changelog
 
