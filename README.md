@@ -6,7 +6,7 @@ A robust bash script to upload files to GoFile.io with automatic latency-based s
 
 - ✅ **Fastest-Server Selection (default)** - Probes all available GoFile servers by connection latency and automatically uploads to the closest/least congested one
 - ✅ **Smart File Detection** - Automatically detects file size and shows appropriate upload time estimates
-- ✅ **Memory Optimized** - Uses temporary files to handle large uploads without consuming excessive RAM
+- ✅ **Large-File Friendly** - Streams the file straight from disk (the temp files only hold small JSON responses) and has no fixed time limit: an upload is aborted only if the transfer stalls (under 1 KB/s for 120 s)
 - ✅ **Optional Account Upload** - Supply your GoFile API token to tie uploads to your account instead of uploading as a guest
 - ✅ **Retry on Transient Failures** - Automatically retries the server-list and upload requests on connection hiccups
 - ✅ **Progress Tracking** - Shows upload progress with a visual progress bar
@@ -43,7 +43,7 @@ From there, follow the Linux instructions below — everything works the same in
 
 ## Requirements
 
-- `bash` (4.0+)
+- `bash` (3.2+, so the macOS default works)
 - `curl` - For making HTTP requests
 - `jq` - For parsing JSON responses
 - `stat` - For determining file size (present by default on Linux/macOS, and inside WSL)

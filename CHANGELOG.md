@@ -2,6 +2,20 @@
 
 All notable changes to this script are documented here.
 
+## [1.3.1]
+
+### Fixed
+- **Uploads no longer die on a fixed time cap.** The size-tiered `--max-time` (10/30/60 min) killed slow-but-healthy uploads (e.g. ~1 GB on a ~12 Mbps uplink needs more than 10 min). It is replaced by a stall check: the upload aborts only if throughput stays under 1 KB/s for 120 s.
+- **GoFile's real error is now shown.** The upload no longer uses `--fail` (which made curl discard the response body on HTTP 4xx/5xx); the script reads the HTTP status itself and prints the API's response.
+- `check_api_error` no longer exits silently when the response isn't JSON (e.g. an HTML error page): a failing `jq` under `set -e` is handled. It also treats any non-`ok` status (`error-xxx`, not only `error`) as an error.
+- File names containing `;`, `,` or quotes (or starting with `@` / `<`) are now escaped for curl's `-F` parser.
+- **Token no longer visible in `ps`.** The token is passed to curl through a config on stdin (`-K -`) instead of `-H` / `--form-string` command-line arguments, so other users on a shared machine can't read it from the process list.
+- **Ctrl-C / `kill` now exit non-zero (130 / 143)** instead of potentially reporting success. Temp files are still cleaned up.
+- `mapfile` (bash 4+) replaced with a `while read` loop so `--list-servers` / `--auto-fastest` work on macOS's bash 3.2.
+
+### Changed
+- README: removed the misleading "Memory Optimized" claim (the temp files only hold small JSON responses; the upload itself is streamed by curl) and lowered the documented bash requirement to 3.2+.
+
 ## [1.3.0]
 
 ### Added

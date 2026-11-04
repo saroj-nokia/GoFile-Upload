@@ -6,7 +6,7 @@ set -o pipefail
 # This script uploads a specified file to GoFile.io and displays the download link.
 # Optimized for large files (e.g., compressed files, images, ROMs 1-4 GB).
 
-VERSION="1.3.0"
+VERSION="1.3.1"
 
 # --- Error Handling Function ---
 # A function to print error messages to stderr and exit.
@@ -29,7 +29,12 @@ cleanup() {
     [[ -n "$STDERR_FILE" ]] && rm -f "$STDERR_FILE"
     exit "$exit_code"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# Ctrl-C / kill must exit non-zero (130 / 143), not reuse a stale $? of 0, so
+# callers never mistake an interrupted upload for a success. `exit` still
+# runs the EXIT trap above, which does the cleanup.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- Argument Parsing ---
 # Token can come from -t/--token, or the GOFILE_TOKEN env var (preferred for
@@ -214,9 +219,13 @@ fi
 # message directly instead of just saying a field was missing/null.
 check_api_error() {
     local resp_file="$1" context="$2" status msg
-    status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null)
-    if [[ "$status" == "error" ]]; then
-        msg=$(jq -r '.message // "no message provided by the API"' "$resp_file" 2>/dev/null)
+    # "|| true": the body may not be JSON at all (e.g. an HTML error page),
+    # and under set -e a failing jq in an assignment would kill the script
+    # silently before any error message is printed.
+    status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null) || true
+    # Any status other than "ok" is an error (GoFile uses "error", "error-xxx", ...).
+    if [[ -n "$status" && "$status" != "ok" ]]; then
+        msg=$(jq -r '.message // .status' "$resp_file" 2>/dev/null) || msg="$status"
         error_exit "GoFile API error while $context: $msg"
     fi
 }
@@ -229,7 +238,11 @@ check_api_error "$TEMP_FILE" "fetching server list"
 # API lists, zero extra overhead. The flags below are opt-in and add a
 # latency probe against each candidate server before picking one.
 if [[ "$LIST_SERVERS" == true || "$AUTO_FASTEST" == true || "$CHOOSE_SERVER" == true ]]; then
-    mapfile -t SERVER_NAMES < <(jq -r '.data.servers[].name' "$TEMP_FILE" 2>"$STDERR_FILE")
+    # while-read instead of mapfile: mapfile needs bash 4+, but macOS ships 3.2.
+    SERVER_NAMES=()
+    while IFS= read -r name; do
+        SERVER_NAMES+=("$name")
+    done < <(jq -r '.data.servers[].name' "$TEMP_FILE" 2>"$STDERR_FILE")
     if [[ "${#SERVER_NAMES[@]}" -eq 0 || -z "${SERVER_NAMES[0]}" ]]; then
         echo "API Response:" >&2
         cat "$TEMP_FILE" >&2
@@ -332,17 +345,6 @@ else
 fi
 echo ""
 
-# Timeout scales with file size:
-# - Files < 1GB: 600s (10 min)
-# - Files 1-3GB: 1800s (30 min)
-# - Files > 3GB: 3600s (60 min)
-UPLOAD_TIMEOUT=600
-if [[ $FILE_SIZE_BYTES -gt 3221225472 ]]; then  # >3GB
-    UPLOAD_TIMEOUT=3600
-elif [[ $FILE_SIZE_BYTES -gt 1073741824 ]]; then  # >1GB
-    UPLOAD_TIMEOUT=1800
-fi
-
 # --retry only helps with connection-establishment failures, not a drop
 # mid-upload, but it's a cheap safety net for flaky networks.
 # NOTE: stderr is left going to the terminal here (not captured to a file)
@@ -356,18 +358,43 @@ fi
 # different things. Sending both is harmless if only one is actually read,
 # and avoids guessing wrong. curl -F/-H args never get echoed anywhere by
 # this script, so the token doesn't leak into the visible output.
-UPLOAD_ARGS=(-F "file=@${FILE}")
+# Escape \ and " and wrap in quotes so curl's -F parser accepts file names
+# containing ; , or quotes.
+ESC_FILE=${FILE//\\/\\\\}
+ESC_FILE=${ESC_FILE//\"/\\\"}
+UPLOAD_ARGS=(-F "file=@\"${ESC_FILE}\"")
+# The token reaches curl through a config on stdin (-K -), NOT as -H /
+# --form-string arguments: command-line arguments are readable by every user
+# via ps and /proc, which matters on shared build servers.
+# form-string sends it literally (plain -F treats a leading @ or < specially).
+CURL_CFG=""
 if [[ -n "$TOKEN" ]]; then
-    UPLOAD_ARGS+=(-F "token=${TOKEN}" -H "Authorization: Bearer ${TOKEN}")
+    ESC_TOKEN=${TOKEN//\\/\\\\}
+    ESC_TOKEN=${ESC_TOKEN//\"/\\\"}
+    CURL_CFG="header = \"Authorization: Bearer ${ESC_TOKEN}\""$'\n'"form-string = \"token=${ESC_TOKEN}\""$'\n'
+    UPLOAD_ARGS+=(-K -)
 fi
 
-if ! curl -# --fail --connect-timeout 30 --max-time "$UPLOAD_TIMEOUT" --retry 2 --retry-delay 5 \
+# No --max-time: any fixed cap eventually kills a slow-but-healthy upload
+# (e.g. ~1GB on a ~12 Mbps uplink needs more than 10 min). Abort only if the
+# transfer stalls (< 1 KB/s for 120 s). No --fail either: with it curl drops
+# the response body on HTTP 4xx/5xx, hiding GoFile's actual error message.
+CURL_RC=0
+HTTP_CODE=$(curl -# --connect-timeout 30 --speed-limit 1024 --speed-time 120 --retry 2 --retry-delay 5 \
     "${UPLOAD_ARGS[@]}" "https://${SERVER}.gofile.io/uploadFile" \
-    -o "$TEMP_FILE"; then
-    error_exit "File upload failed! The file might be too large, the server is unavailable, your connection is too slow, or (if using -t/--token) the token was rejected."
+    -o "$TEMP_FILE" -w '%{http_code}' <<<"$CURL_CFG") || CURL_RC=$?
+if [[ "$CURL_RC" -ne 0 ]]; then
+    error_exit "File upload failed (curl exit code ${CURL_RC})! The server may be unavailable, the connection may have stalled, or the connection was lost."
 fi
 
 check_api_error "$TEMP_FILE" "uploading file"
+
+if [[ "$HTTP_CODE" -ge 400 ]]; then
+    echo "Upload Response:" >&2
+    head -c 500 "$TEMP_FILE" >&2
+    echo >&2
+    error_exit "GoFile rejected the upload (HTTP ${HTTP_CODE}). If using -t/--token, check that the token is valid."
+fi
 
 # Parse the upload response
 if ! LINK=$(jq -r '.data.downloadPage' "$TEMP_FILE" 2>"$STDERR_FILE"); then
