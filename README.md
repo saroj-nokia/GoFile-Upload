@@ -328,7 +328,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This script is provided as-is under the MIT License.
+This is a fork of [Sushrut1101/GoFile-Upload](https://github.com/Sushrut1101/GoFile-Upload).
+The upstream project does not currently declare a license, so no license is granted here
+either. All rights to the original work remain with its author.
 
 ## Acknowledgments
 
