@@ -18,7 +18,7 @@ All notable changes to this script are documented here.
 - Running with no arguments now prints the usage to stderr and **exits 1** (it used to exit 0, which made scripts think it had worked).
 - If every latency probe fails, `--auto-fastest` / `--choose-server` now warn and fall back to the first server GoFile listed, instead of treating an arbitrary unreachable server as "fastest".
 - `--` ends option parsing, so file names starting with `-` work.
-- README: install URLs are pinned to the release tag (`v1.4.0`), plus documentation for the new options and a corrected Memory Usage section.
+- README: documentation for the new options and a corrected Memory Usage section.
 
 ### Fixed
 - If both `stat` variants failed, `set -e` exited silently before the "could not determine file size" message; the message is now shown.

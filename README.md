@@ -85,11 +85,9 @@ There are two common ways to use this script — pick whichever fits your workfl
 Best if you'll be uploading files regularly, want to inspect the script before running it, or want to use `-h`/`--help` and version info without re-downloading each time.
 
 ```bash
-curl -o upload.sh https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh
+curl -o upload.sh https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
 chmod +x upload.sh
 ```
-
-> The download URLs in this README point at the latest release tag (`v1.4.0`), so you get a known, tested version. Replace `refs/tags/v1.4.0` with `refs/heads/master` if you want the development version.
 
 Then run it from wherever you downloaded it:
 ```bash
@@ -98,7 +96,7 @@ Then run it from wherever you downloaded it:
 
 **Install it globally** (so you can run `gofile-upload` from any directory):
 ```bash
-sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh
+sudo curl -o /usr/local/bin/gofile-upload https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh
 sudo chmod +x /usr/local/bin/gofile-upload
 gofile-upload /path/to/file.zip
 ```
@@ -108,13 +106,13 @@ gofile-upload /path/to/file.zip
 Convenient for one-off uploads or CI scripts, at the cost of trusting whatever is currently at that URL — you're piping a remote script straight into `bash` without inspecting it first. If that matters to you, use Option A instead.
 
 ```bash
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- /path/to/your/file.zip
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- /path/to/your/file.zip
 ```
 
 Flags work the same way — put them after `-s --`:
 ```bash
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- --list-servers
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- -t "$GOFILE_TOKEN" backup.tar.gz
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- --list-servers
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- -t "$GOFILE_TOKEN" backup.tar.gz
 ```
 
 > **Note:** `--choose-server` (the interactive picker) works fine over `curl | bash` too, as long as you're running it in an actual terminal — the script detects whether stdin is interactive and falls back to the fastest server automatically if it isn't (e.g. if you're running this from a non-interactive script or cron job).
@@ -264,7 +262,7 @@ echo "Download: $LINK"
 
 **Upload via `curl | bash` with a token from an env var:**
 ```bash
-curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/tags/v1.4.0/upload.sh | bash -s -- -t "$GOFILE_TOKEN" recording.mp4
+curl -s https://raw.githubusercontent.com/saroj-nokia/GoFile-Upload/refs/heads/master/upload.sh | bash -s -- -t "$GOFILE_TOKEN" recording.mp4
 ```
 
 ## Output Example
